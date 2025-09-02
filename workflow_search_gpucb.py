@@ -1212,8 +1212,8 @@ def main():
         best_score = float(np.max(explored_scores)) if len(explored_scores) > 0 else -np.inf
         max_ucb_unexplored = float(np.max(ucb_masked)) if np.any(np.isfinite(ucb_masked)) else -np.inf
         min_explored_before_stop = int(getattr(args, 'stop_min_explored', 2))
-        if len(explored_indices) >= min_explored_before_stop and max_ucb_unexplored <= best_score + args.stop_margin:
-            print(f"[GP-UCB] Stopping early: max UCB among unexplored ({max_ucb_unexplored:.2f}) <= best_score + margin ({best_score + args.stop_margin:.2f})")
+        if len(explored_indices) >= min_explored_before_stop and max_ucb_unexplored <= best_score:
+            print(f"[GP-UCB] Stopping early: max UCB among unexplored ({max_ucb_unexplored:.2f}) <= best_score ({best_score:.2f})")
             with open(log_path, 'a') as f:
                 f.write(json.dumps({
                     'iteration': it,
