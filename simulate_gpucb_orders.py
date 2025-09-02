@@ -27,7 +27,7 @@ def theoretical_return(order: List[int], canonical: List[int], step_penalty: flo
 
 def main():
     parser = argparse.ArgumentParser("Simulate GP-UCB over 24 workflow orders using theoretical returns")
-    parser.add_argument('--kernel_type', type=str, default='rbf_rank', choices=['rbf_rank', 'rbf_pairwise', 'rbf_mixed'])
+    parser.add_argument('--kernel_type', type=str, default='rbf_rank', choices=['rbf_rank', 'rbf_pairwise', 'rbf_mixed', 'rbf_posunmatch'])
     parser.add_argument('--rank_scale', type=float, default=1.0)
     parser.add_argument('--pairwise_scale', type=float, default=1.0)
     parser.add_argument('--length_scale', type=float, default=0.75)

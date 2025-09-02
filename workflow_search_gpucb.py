@@ -60,6 +60,21 @@ def workflow_to_pairwise_embedding(workflow: List[int], num_targets: int = 4) ->
     return vec
 
 
+def workflow_to_posunmatch_embedding(workflow: List[int], num_targets: int = 4) -> np.ndarray:
+    """Embedding that yields weighted position-unmatch squared distance.
+
+    - Build a (num_targets x num_targets) one-hot over positions, scaled by (i+1)/sqrt(2) per row i.
+    - For two workflows, at each position i, if targets match, row vectors equal -> contribution 0.
+      If mismatch, row vectors differ at two entries of magnitude (i+1)/sqrt(2), so L2^2 =
+      2 * ((i+1)^2 / 2) = (i+1)^2. Summing across i gives desired weighted mismatch distance.
+    """
+    vec = np.zeros((num_targets, num_targets), dtype=np.float32)
+    for i, t in enumerate(workflow):
+        scale = float(i + 1) / np.sqrt(2.0)
+        vec[i, t] = scale
+    return vec.reshape(num_targets * num_targets)
+
+
 def build_workflow_embedding(
     workflow: List[int],
     kernel_type: str = 'rbf_rank',
@@ -72,6 +87,7 @@ def build_workflow_embedding(
     - 'rbf_rank': RBF over normalized rank vector
     - 'rbf_pairwise': RBF over pairwise order vector
     - 'rbf_mixed': RBF over concatenation of (rank, pairwise)
+    - 'rbf_posunmatch': RBF over position-unmatch embedding (weighted by (i+1)^2 per mismatch)
     """
     if kernel_type == 'rbf_rank':
         return rank_scale * workflow_to_rank_embedding(workflow, num_targets)
@@ -81,6 +97,8 @@ def build_workflow_embedding(
         rank_part = rank_scale * workflow_to_rank_embedding(workflow, num_targets)
         pair_part = pairwise_scale * workflow_to_pairwise_embedding(workflow, num_targets)
         return np.concatenate([rank_part, pair_part])
+    elif kernel_type == 'rbf_posunmatch':
+        return workflow_to_posunmatch_embedding(workflow, num_targets)
     else:
         return rank_scale * workflow_to_rank_embedding(workflow, num_targets)
 
@@ -1068,7 +1086,7 @@ def main():
     parser.add_argument('--penalty_offworkflow', type=float, default=-50.0)
     parser.add_argument('--length_scale', type=float, default=0.75)
     parser.add_argument('--signal_variance', type=float, default=1.0)
-    parser.add_argument('--kernel_type', type=str, default='rbf_rank', choices=['rbf_rank','rbf_pairwise','rbf_mixed'])
+    parser.add_argument('--kernel_type', type=str, default='rbf_rank', choices=['rbf_rank','rbf_pairwise','rbf_mixed','rbf_posunmatch'])
     parser.add_argument('--rank_scale', type=float, default=1.0)
     parser.add_argument('--pairwise_scale', type=float, default=1.0)
     # removed kernel_pos_weighting
