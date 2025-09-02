@@ -97,7 +97,7 @@ def build_workflow_embedding(
         rank_part = rank_scale * workflow_to_rank_embedding(workflow, num_targets)
         pair_part = pairwise_scale * workflow_to_pairwise_embedding(workflow, num_targets)
         return np.concatenate([rank_part, pair_part])
-    elif kernel_type == 'rbf_posunmatch':
+    elif kernel_type in ('rbf_posunmatch', 'rbf_possunmatch'):
         return workflow_to_posunmatch_embedding(workflow, num_targets)
     else:
         return rank_scale * workflow_to_rank_embedding(workflow, num_targets)
@@ -1086,7 +1086,7 @@ def main():
     parser.add_argument('--penalty_offworkflow', type=float, default=-50.0)
     parser.add_argument('--length_scale', type=float, default=0.75)
     parser.add_argument('--signal_variance', type=float, default=1.0)
-    parser.add_argument('--kernel_type', type=str, default='rbf_rank', choices=['rbf_rank','rbf_pairwise','rbf_mixed','rbf_posunmatch'])
+    parser.add_argument('--kernel_type', type=str, default='rbf_rank', choices=['rbf_rank','rbf_pairwise','rbf_mixed','rbf_posunmatch','rbf_possunmatch'])
     parser.add_argument('--rank_scale', type=float, default=1.0)
     parser.add_argument('--pairwise_scale', type=float, default=1.0)
     # removed kernel_pos_weighting
