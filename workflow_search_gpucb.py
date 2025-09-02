@@ -1076,6 +1076,7 @@ def main():
     parser.add_argument('--kappa', type=float, default=2.0, help='UCB exploration parameter')
     # removed advanced GP-UCB flags (kappa_decay, std_floor, prune_topk, batch_ucb)
     parser.add_argument('--stop_margin', type=float, default=0.0, help='Early stop if max UCB <= best_score + margin')
+    parser.add_argument('--stop_min_explored', type=int, default=2, help='Require at least this many explored workflows before UCB early stopping')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--exp_name', type=str, default='gpucb_diagonal')
     parser.add_argument('--use_mp', action='store_true')
@@ -1126,11 +1127,13 @@ def main():
             'adherence_patience': int(args.adherence_patience),
             'early_stop_on_adherence': bool(args.early_stop_on_adherence),
             'length_scale': args.length_scale,
+            'signal_variance': args.signal_variance,
             'kernel_type': args.kernel_type,
             'rank_scale': args.rank_scale,
             'pairwise_scale': args.pairwise_scale,
             'noise': args.noise,
             'kappa': args.kappa,
+            'stop_min_explored': 2,
             'stop_margin': args.stop_margin,
             'debug_rewards': bool(args.debug_rewards),
             'debug_rewards_env': int(args.debug_rewards_env),
@@ -1190,7 +1193,7 @@ def main():
         # Early stop if no promising workflows remain
         best_score = float(np.max(explored_scores)) if len(explored_scores) > 0 else -np.inf
         max_ucb_unexplored = float(np.max(ucb_masked)) if np.any(np.isfinite(ucb_masked)) else -np.inf
-        min_explored_before_stop = 2
+        min_explored_before_stop = int(getattr(args, 'stop_min_explored', 2))
         if len(explored_indices) >= min_explored_before_stop and max_ucb_unexplored <= best_score + args.stop_margin:
             print(f"[GP-UCB] Stopping early: max UCB among unexplored ({max_ucb_unexplored:.2f}) <= best_score + margin ({best_score + args.stop_margin:.2f})")
             with open(log_path, 'a') as f:
@@ -1292,6 +1295,7 @@ def main():
             length_scale=args.length_scale,
             noise=args.noise,
         )
+        # Before/after comparison for transparency
         ucb_upd = mu_upd + args.kappa * std_upd
         unexplored_after = [i for i in range(len(candidates)) if i not in explored_indices]
         # Print top-5 unexplored by updated UCB
@@ -1311,6 +1315,19 @@ def main():
             'phase': phase,
             'epsilon': float(eps_for_iter)
         }
+        # Include top-10 predictions before and after the update
+        try:
+            top_before = [
+                {'idx': int(i), 'workflow': candidates[i], 'mu': float(mu[i]), 'std': float(std[i]), 'ucb': float(ucb[i])}
+                for i in list(np.argsort(ucb)[::-1][:10])
+            ]
+            top_after = [
+                {'idx': int(i), 'workflow': candidates[i], 'mu': float(mu_upd[i]), 'std': float(std_upd[i]), 'ucb': float(ucb_upd[i])}
+                for i in list(np.argsort(ucb_upd)[::-1][:10])
+            ]
+            record.update({'gp_top_before': top_before, 'gp_top_after': top_after})
+        except Exception:
+            pass
         # Include per-update env-eval summary in record
         record.update({
             'env_eval_last': float(train_stats.get('env_eval_last', 0.0)),
