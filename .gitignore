@@ -1,0 +1,7 @@
+gym-maze/
+third_party/
+venv/
+__pycache__/
+logs/
+*.log
+nohup.out
