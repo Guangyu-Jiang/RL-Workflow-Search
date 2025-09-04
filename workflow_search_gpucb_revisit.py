@@ -65,8 +65,9 @@ def main():
     parser.add_argument('--no_revisits', dest='allow_revisits', action='store_false', help='Disallow revisiting already observed workflows')
     parser.set_defaults(allow_revisits=True)
     # Stability: continuation and LR decay
-    parser.add_argument('--continue_policy', action='store_true', help='Continue training from last policy for a revisited workflow')
-    parser.add_argument('--lr_decay', type=float, default=1.0, help='Multiplicative LR decay applied after each revisit of the same workflow')
+    parser.add_argument('--continue_policy', action='store_true', help='Continue training from existing policy across workflows (global) or per-workflow')
+    parser.add_argument('--continuation_scope', type=str, default='global', choices=['global','per_workflow'], help='Use global policy continuation (default) or per-workflow cache')
+    parser.add_argument('--lr_decay', type=float, default=1.0, help='Multiplicative LR decay applied after each workflow selection')
     # Misc
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--exp_name', type=str, default='gpucb_diagonal_revisit')
@@ -116,6 +117,9 @@ def main():
     # For revisits: track per-workflow policy state and LR
     policy_cache: Dict[Tuple[int,int,int,int], Tuple[dict, float]] = {}
     visit_counts: Dict[Tuple[int,int,int,int], int] = {}
+    # Global continuation state
+    current_policy_state = None
+    current_lr = float(args.lr)
 
     it = 0
     current_epsilon = float(args.epsilon)
@@ -179,14 +183,17 @@ def main():
         # Policy initialization or continuation
         start_lr = float(args.lr)
         continued = False
-        if bool(args.continue_policy) and wf in policy_cache:
-            # Restore policy and decay LR for stability
-            state_dict, prev_lr = policy_cache[wf]
-            effective_lr = max(1e-6, prev_lr * float(args.lr_decay))
-            continued = True
-        else:
-            state_dict = None
-            effective_lr = start_lr
+        state_dict = None
+        effective_lr = start_lr
+        if bool(args.continue_policy):
+            if args.continuation_scope == 'global' and current_policy_state is not None:
+                state_dict = current_policy_state
+                effective_lr = float(current_lr)
+                continued = True
+            elif args.continuation_scope == 'per_workflow' and wf in policy_cache:
+                state_dict, prev_lr = policy_cache[wf]
+                effective_lr = max(1e-6, prev_lr * float(args.lr_decay))
+                continued = True
 
         # Train
         # We reuse train_for_workflow but optionally inject initial policy and LR
@@ -214,6 +221,7 @@ def main():
         # Track visit count once per selection
         vc = visit_counts.get(wf, 0) + 1
         visit_counts[wf] = vc
+        score_on_adh1 = None
         for update in range(int(args.updates)):
             if bool(args.use_mp):
                 batch_trajs = rollout_shaped_multiprocessing(
@@ -315,10 +323,11 @@ def main():
                 print(f"    EvalEnv canonical (mean): {eval_env_return:7.2f}", flush=True)
             else:
                 print(f"    RolloutEnv (mean env-only over batch): {eval_env_return:7.2f}", flush=True)
-            # Track canonical-eval when adherence is perfect
-            if mean_adherence >= 1.0:
+            # When adherence hits 100%, record score and switch workflow immediately (GP update next)
+            if mean_adherence >= 1.0 and score_on_adh1 is None:
                 env_eval_when_adh1.append(eval_env_return)
-            # Early stop on adherence target
+                score_on_adh1 = float(eval_env_return)
+            # Early stop on adherence target (optional legacy)
             if bool(args.early_stop_on_adherence):
                 if mean_adherence >= float(args.adherence_target):
                     consecutive_target_meets += 1
@@ -326,39 +335,7 @@ def main():
                     consecutive_target_meets = 0
                 if consecutive_target_meets >= int(args.adherence_patience):
                     print(f"  [Train wf {list(wf)}] Early stop on adherence: mean_adherence={mean_adherence:.3f} for {consecutive_target_meets} consecutive updates")
-                    # Log and break
                     updates_run = update + 1
-                    # Write last row before break
-                    try:
-                        header = [
-                            'workflow', 'visit', 'update', 'total_update',
-                            'mean_return_shaped', 'mean_env_return', 'mean_adherence', 'success_rate', 'avg_ep_len', 'mode_seq', 'mode_frac',
-                            'policy_loss', 'value_loss', 'entropy'
-                        ]
-                        row = {
-                            'workflow': '-'.join(map(str, wf)),
-                            'visit': int(vc),
-                            'update': int(update),
-                            'total_update': int(it * int(args.updates) + update),
-                            'mean_return_shaped': float(mean_return),
-                            'mean_env_return': float(eval_env_return),
-                            'mean_adherence': float(mean_adherence),
-                            'success_rate': float(success_rate),
-                            'avg_ep_len': float(avg_ep_len),
-                            'mode_seq': ' '.join(map(str, mode_seq)),
-                            'mode_frac': float(mode_frac),
-                            'policy_loss': float(stats.get('policy_loss', 0.0)),
-                            'value_loss': float(stats.get('value_loss', 0.0)),
-                            'entropy': float(stats.get('entropy', 0.0)),
-                        }
-                        write_header = not os.path.exists(updates_csv)
-                        with open(updates_csv, 'a', newline='') as csvfile:
-                            writer = csv.DictWriter(csvfile, fieldnames=header)
-                            if write_header:
-                                writer.writeheader()
-                            writer.writerow(row)
-                    except Exception:
-                        pass
                     break
             # Canonical-eval stability early stop when adh=100%
             if len(env_eval_when_adh1) >= 3:
@@ -407,13 +384,19 @@ def main():
             # If stability early stop triggered above (env_eval_when_adh1 last3 non-increasing), break here
             if len(env_eval_when_adh1) >= 3 and env_eval_when_adh1[-1] <= env_eval_when_adh1[-2] <= env_eval_when_adh1[-3]:
                 break
+            # If we just hit 100% adherence, switch workflows after logging this row
+            if score_on_adh1 is not None:
+                updates_run = update + 1
+                break
 
-        # Score: use max canonical mean during this selection
-        if bool(args.eval_use_canonical) and len(env_eval_history) > 0:
+        # Score for GP update
+        if score_on_adh1 is not None:
+            score = float(score_on_adh1)
+            score_source = 'adh1_canonical_mean'
+        elif bool(args.eval_use_canonical) and len(env_eval_history) > 0:
             score = float(np.max(env_eval_history))
             score_source = 'max_canonical_mean_during_training'
         else:
-            # Fallback: quick eval over proposed
             env = DiagonalCornersEnv(max_steps=int(args.max_steps))
             eval_returns = [rollout_env_only(env, policy, list(wf), device, deterministic=True) for _ in range(int(args.final_eval_episodes))]
             score = float(np.mean(eval_returns))
@@ -429,8 +412,10 @@ def main():
             pos = observed_indices.index(next_idx)
             observed_scores[pos] = max(observed_scores[pos], score)
 
-        # Update policy cache with latest state dict and LR for potential continuation
-        policy_cache[wf] = (policy.state_dict(), float(effective_lr))
+        # Update continuation state: global and optional per-workflow
+        current_policy_state = {k: v.detach().cpu() for k, v in policy.state_dict().items()}
+        current_lr = max(1e-6, float(effective_lr) * float(args.lr_decay))
+        policy_cache[wf] = (current_policy_state, float(current_lr))
 
         # Log GP state and selection
         try:
