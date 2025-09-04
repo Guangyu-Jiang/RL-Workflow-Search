@@ -64,6 +64,8 @@ def main():
     parser.add_argument('--allow_revisits', dest='allow_revisits', action='store_true', help='Allow selecting previously observed workflows (default)')
     parser.add_argument('--no_revisits', dest='allow_revisits', action='store_false', help='Disallow revisiting already observed workflows')
     parser.set_defaults(allow_revisits=True)
+    # Global stopping based on total updates across all workflows
+    parser.add_argument('--max_total_updates', type=int, default=10000, help='Stop the entire search once this many PPO updates have been run in total')
     # Stability: continuation and LR decay
     parser.add_argument('--continue_policy', action='store_true', help='Continue training from existing policy across workflows (global) or per-workflow')
     parser.add_argument('--continuation_scope', type=str, default='global', choices=['global','per_workflow'], help='Use global policy continuation (default) or per-workflow cache')
@@ -122,6 +124,8 @@ def main():
     current_lr = float(args.lr)
 
     it = 0
+    global_update_count = 0
+    hit_global_limit = False
     current_epsilon = float(args.epsilon)
     while True:
         # Posterior on all
@@ -223,6 +227,9 @@ def main():
         visit_counts[wf] = vc
         score_on_adh1 = None
         for update in range(int(args.updates)):
+            # Increment global update counter and compute total_update index for logging
+            global_update_count += 1
+            total_update_idx = int(global_update_count)
             if bool(args.use_mp):
                 batch_trajs = rollout_shaped_multiprocessing(
                     policy,
@@ -357,7 +364,7 @@ def main():
                     'workflow': '-'.join(map(str, wf)),
                     'visit': int(vc),
                     'update': int(update),
-                    'total_update': int(it * int(args.updates) + update),
+                    'total_update': int(total_update_idx),
                     'mean_return_shaped': float(mean_return),
                     'mean_env_return': float(eval_env_return),
                     'mean_adherence': float(mean_adherence),
@@ -387,6 +394,11 @@ def main():
             # If we just hit 100% adherence, switch workflows after logging this row
             if score_on_adh1 is not None:
                 updates_run = update + 1
+                break
+            # Stop globally if max total updates reached
+            if global_update_count >= int(args.max_total_updates):
+                print(f"[Search] Stopping: reached max_total_updates={int(args.max_total_updates)}", flush=True)
+                hit_global_limit = True
                 break
 
         # Score for GP update
@@ -438,6 +450,8 @@ def main():
 
         it += 1
         current_epsilon = max(float(args.min_epsilon), float(current_epsilon) * float(args.epsilon_decay))
+        if hit_global_limit:
+            break
         if int(args.iterations) > 0 and it >= int(args.iterations):
             break
 
