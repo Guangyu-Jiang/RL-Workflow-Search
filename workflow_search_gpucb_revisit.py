@@ -206,6 +206,11 @@ def main():
         updates_run = 0
         env_eval_history = []
         updates_csv = os.path.join(run_dir, 'updates.csv')
+        adherence_history = []
+        success_history = []
+        env_eval_when_adh1 = []
+        consecutive_target_meets = 0
+        last_mean_adherence = 0.0
         # Track visit count once per selection
         vc = visit_counts.get(wf, 0) + 1
         visit_counts[wf] = vc
@@ -283,12 +288,87 @@ def main():
             else:
                 eval_env_return = float(np.mean([tr.get('env_ep_return', 0.0) for tr in batch_trajs]))
             env_eval_history.append(eval_env_return)
+            # Adherence metrics and early stopping
+            mean_adherence = float(np.mean([tr.get('adherence', 0.0) for tr in batch_trajs]))
+            success_rate = float(np.mean([1.0 if tr.get('success', False) else 0.0 for tr in batch_trajs]))
+            ep_lengths = [len(tr.get('dones', [])) for tr in batch_trajs]
+            avg_ep_len = float(np.mean(ep_lengths)) if len(ep_lengths) > 0 else 0.0
+            try:
+                from collections import Counter
+                seqs = [tuple(tr.get('visited_sequence', [])) for tr in batch_trajs]
+                mode_seq = []
+                mode_frac = 0.0
+                if len(seqs) > 0:
+                    c = Counter(seqs)
+                    mode_seq_t, mode_count = c.most_common(1)[0]
+                    mode_seq = list(mode_seq_t)
+                    mode_frac = float(mode_count) / float(len(seqs))
+            except Exception:
+                mode_seq = []
+                mode_frac = 0.0
+            adherence_history.append(mean_adherence)
+            success_history.append(success_rate)
+            last_mean_adherence = mean_adherence
+            # Track canonical-eval when adherence is perfect
+            if mean_adherence >= 1.0:
+                env_eval_when_adh1.append(eval_env_return)
+            # Early stop on adherence target
+            if bool(args.early_stop_on_adherence):
+                if mean_adherence >= float(args.adherence_target):
+                    consecutive_target_meets += 1
+                else:
+                    consecutive_target_meets = 0
+                if consecutive_target_meets >= int(args.adherence_patience):
+                    print(f"  [Train wf {list(wf)}] Early stop on adherence: mean_adherence={mean_adherence:.3f} for {consecutive_target_meets} consecutive updates")
+                    # Log and break
+                    updates_run = update + 1
+                    # Write last row before break
+                    try:
+                        header = [
+                            'workflow', 'visit', 'update', 'total_update',
+                            'mean_return_shaped', 'mean_env_return', 'mean_adherence', 'success_rate', 'avg_ep_len', 'mode_seq', 'mode_frac',
+                            'policy_loss', 'value_loss', 'entropy'
+                        ]
+                        row = {
+                            'workflow': '-'.join(map(str, wf)),
+                            'visit': int(vc),
+                            'update': int(update),
+                            'total_update': int(it * int(args.updates) + update),
+                            'mean_return_shaped': float(mean_return),
+                            'mean_env_return': float(eval_env_return),
+                            'mean_adherence': float(mean_adherence),
+                            'success_rate': float(success_rate),
+                            'avg_ep_len': float(avg_ep_len),
+                            'mode_seq': ' '.join(map(str, mode_seq)),
+                            'mode_frac': float(mode_frac),
+                            'policy_loss': float(stats.get('policy_loss', 0.0)),
+                            'value_loss': float(stats.get('value_loss', 0.0)),
+                            'entropy': float(stats.get('entropy', 0.0)),
+                        }
+                        write_header = not os.path.exists(updates_csv)
+                        with open(updates_csv, 'a', newline='') as csvfile:
+                            writer = csv.DictWriter(csvfile, fieldnames=header)
+                            if write_header:
+                                writer.writeheader()
+                            writer.writerow(row)
+                    except Exception:
+                        pass
+                    break
+            # Canonical-eval stability early stop when adh=100%
+            if len(env_eval_when_adh1) >= 3:
+                if env_eval_when_adh1[-1] <= env_eval_when_adh1[-2] <= env_eval_when_adh1[-3]:
+                    print(f"  [Train wf {list(wf)}] Early stop on canonical-eval stability (adh=100%): last3={env_eval_when_adh1[-3:]} (non-increasing)")
+                    updates_run = update + 1
+                    # fall through to logging row and then break
+                    # (we will still write the row below)
+                    pass
 
             # Logging with visit count and total_update index for convergence plots
             try:
                 header = [
                     'workflow', 'visit', 'update', 'total_update',
-                    'mean_return_shaped', 'mean_env_return', 'policy_loss', 'value_loss', 'entropy'
+                    'mean_return_shaped', 'mean_env_return', 'mean_adherence', 'success_rate', 'avg_ep_len', 'mode_seq', 'mode_frac',
+                    'policy_loss', 'value_loss', 'entropy'
                 ]
                 row = {
                     'workflow': '-'.join(map(str, wf)),
@@ -297,6 +377,11 @@ def main():
                     'total_update': int(it * int(args.updates) + update),
                     'mean_return_shaped': float(mean_return),
                     'mean_env_return': float(eval_env_return),
+                    'mean_adherence': float(mean_adherence),
+                    'success_rate': float(success_rate),
+                    'avg_ep_len': float(avg_ep_len),
+                    'mode_seq': ' '.join(map(str, mode_seq)),
+                    'mode_frac': float(mode_frac),
                     'policy_loss': float(stats.get('policy_loss', 0.0)),
                     'value_loss': float(stats.get('value_loss', 0.0)),
                     'entropy': float(stats.get('entropy', 0.0)),
@@ -313,6 +398,9 @@ def main():
             updates_run = update + 1
             if int(args.eval_episodes_per_update) <= 0:
                 pass
+            # If stability early stop triggered above (env_eval_when_adh1 last3 non-increasing), break here
+            if len(env_eval_when_adh1) >= 3 and env_eval_when_adh1[-1] <= env_eval_when_adh1[-2] <= env_eval_when_adh1[-3]:
+                break
 
         # Score: use max canonical mean during this selection
         if bool(args.eval_use_canonical) and len(env_eval_history) > 0:
@@ -349,6 +437,7 @@ def main():
                     'effective_lr': float(effective_lr),
                     'score_env_only': float(score),
                     'score_source': score_source,
+                    'adherence_last': float(last_mean_adherence),
                     'mu': float(mu[next_idx]),
                     'std': float(std[next_idx]),
                     'ucb': float(ucb[next_idx]),
