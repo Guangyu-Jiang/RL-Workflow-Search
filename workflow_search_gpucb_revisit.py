@@ -309,6 +309,12 @@ def main():
             adherence_history.append(mean_adherence)
             success_history.append(success_rate)
             last_mean_adherence = mean_adherence
+            # Real-time console print (mirrors original script)
+            print(f"  [Train wf {list(wf)}] Update {update:3d} | Return {mean_return:7.2f} | Adh {mean_adherence:5.1%} | Succ {success_rate:5.1%} | Len {avg_ep_len:5.1f} | Visit {mode_seq} ({mode_frac:5.1%})", flush=True)
+            if bool(args.eval_use_canonical):
+                print(f"    EvalEnv canonical (mean): {eval_env_return:7.2f}", flush=True)
+            else:
+                print(f"    RolloutEnv (mean env-only over batch): {eval_env_return:7.2f}", flush=True)
             # Track canonical-eval when adherence is perfect
             if mean_adherence >= 1.0:
                 env_eval_when_adh1.append(eval_env_return)
