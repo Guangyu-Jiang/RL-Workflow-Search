@@ -56,7 +56,9 @@ class DiagonalCornersEnv(gym.Env):
         # Allow overriding episode horizon
         self.max_steps: int = int(max_steps) if max_steps is not None else self.grid_size * self.grid_size * 2
 
-    def reset(self, workflow: Optional[List[int]] = None) -> np.ndarray:
+    def reset(self, workflow: Optional[List[int]] = None, seed: Optional[int] = None, options: Optional[Dict] = None) -> np.ndarray:
+        if seed is not None:
+            np.random.seed(seed)
         self.agent_pos = list(self.start_pos)
         self.visited_targets = set()
         self.current_target_idx = 0
@@ -71,6 +73,11 @@ class DiagonalCornersEnv(gym.Env):
             self.correct_order = [0, 1, 2, 3]
 
         return np.array(self.agent_pos, dtype=np.int32)
+
+    def seed(self, seed: Optional[int] = None):
+        if seed is not None:
+            np.random.seed(seed)
+        return [seed]
 
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, Dict]:
         self.steps += 1
