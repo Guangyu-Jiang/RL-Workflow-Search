@@ -12,8 +12,12 @@ from workflow_search_gpucb import *  # reuse all helpers, env wrappers, PPO, GP 
 
 import multiprocessing as mp
 import gym
+import torch.nn as nn
 from stable_baselines3 import PPO as SB3PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import VecMonitor
+from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 
 # Hard cap on total PPO updates across the whole search (replacing CLI flag)
@@ -92,20 +96,13 @@ class ShapedWorkflowEnv(gym.Wrapper):
         self.per_step_penalty = float(per_step_penalty)
         self.visited_sequence: List[int] = []
         self._phi_s: float = 0.0
-        # Expand observation space by 4 for next-target one-hot
-        if isinstance(self.env.observation_space, gym.spaces.Box):
-            import numpy as _np
-            low = _np.asarray(self.env.observation_space.low, dtype=_np.float32)
-            high = _np.asarray(self.env.observation_space.high, dtype=_np.float32)
-            low_append = _np.zeros(4, dtype=_np.float32)
-            high_append = _np.ones(4, dtype=_np.float32)
-            self.observation_space = gym.spaces.Box(
-                low=_np.concatenate([low, low_append]),
-                high=_np.concatenate([high, high_append]),
-                dtype=_np.float32,
-            )
-        else:
-            self.observation_space = self.env.observation_space
+        # Expand observation to match custom policy: [agent_norm(2), targets_norm(8), visited_flags(4), next_target_one_hot(4), workflow_encoding(4)]
+        import numpy as _np
+        self.observation_space = gym.spaces.Box(
+            low=_np.zeros(2 + 4 * 2 + 4 + 4 + 4, dtype=_np.float32),
+            high=_np.ones(2 + 4 * 2 + 4 + 4 + 4, dtype=_np.float32),
+            dtype=_np.float32,
+        )
 
     def reset(self, **kwargs):
         self.visited_sequence = []
@@ -191,8 +188,34 @@ class ShapedWorkflowEnv(gym.Wrapper):
 
     def _augment_obs(self, obs):
         import numpy as _np
+        # Normalize agent position
+        grid_norm = float(getattr(self.env, 'grid_size', 11) - 1)
+        if isinstance(obs, _np.ndarray):
+            agent_r = float(obs[0]) / grid_norm
+            agent_c = float(obs[1]) / grid_norm
+        else:
+            agent_r = float(_to_numpy(obs)[0]) / grid_norm
+            agent_c = float(_to_numpy(obs)[1]) / grid_norm
+        agent_norm = _np.asarray([agent_r, agent_c], dtype=_np.float32)
+
+        # Targets normalized
+        targets = []
+        try:
+            for (r, c) in self.env.target_positions:
+                targets.append(float(r) / grid_norm)
+                targets.append(float(c) / grid_norm)
+        except Exception:
+            targets = [0.0] * (4 * 2)
+        targets_norm = _np.asarray(targets, dtype=_np.float32)
+
+        # Visited flags from wrapper sequence
+        visited_flags = _np.zeros(4, dtype=_np.float32)
+        for t in self.visited_sequence:
+            if 0 <= int(t) < 4:
+                visited_flags[int(t)] = 1.0
+
+        # Next-target one-hot
         one_hot = _np.zeros(4, dtype=_np.float32)
-        # Determine next target index in workflow based on current visited prefix
         next_idx = 0
         for i, t in enumerate(self.workflow):
             if t in self.visited_sequence:
@@ -205,11 +228,14 @@ class ShapedWorkflowEnv(gym.Wrapper):
             next_target = self.workflow[next_idx]
         if 0 <= int(next_target) < 4:
             one_hot[int(next_target)] = 1.0
+
+        # Workflow encoding vector
         try:
-            return _np.concatenate([_to_numpy(obs), one_hot], axis=0)
+            wf_vec = _to_numpy(workflow_to_vector(self.workflow, num_targets=4))
         except Exception:
-            # Fallback if obs already numpy array
-            return _np.concatenate([_np.asarray(obs, dtype=_np.float32), one_hot], axis=0)
+            wf_vec = _np.zeros(4, dtype=_np.float32)
+
+        return _np.concatenate([agent_norm, targets_norm, visited_flags, one_hot, wf_vec], axis=0)
 
     def _compute_phi(self) -> float:
         try:
@@ -624,22 +650,69 @@ def main():
 
         # SB3 PPO branch
         if bool(args.use_sb3):
-            # Build vectorized shaped env(s)
-            def make_env():
-                base = DiagonalCornersEnv(max_steps=int(args.max_steps))
-                return ShapedWorkflowEnv(
-                    base,
-                    list(wf),
-                    gamma=float(args.gamma),
-                    shaping_coef=float(args.shaping_coef),
-                    penalty_revisit=float(args.penalty_revisit),
-                    penalty_future=float(args.penalty_future),
-                    penalty_offworkflow=float(args.penalty_offworkflow),
-                    per_step_penalty=float(args.per_step_penalty),
-                )
-            vec_env = DummyVecEnv([make_env for _ in range(int(args.num_envs))])
-            # SB3 policy architecture: use MlpPolicy. Our obs already concatenates next-target one hot.
-            policy_kwargs = dict(net_arch=[128, 128])
+            # Build vectorized shaped env(s) (seeding per sub-env for diversity)
+            def make_env_fn(rank: int):
+                def _init():
+                    base = DiagonalCornersEnv(max_steps=int(args.max_steps))
+                    env = ShapedWorkflowEnv(
+                        base,
+                        list(wf),
+                        gamma=float(args.gamma),
+                        shaping_coef=float(args.shaping_coef),
+                        penalty_revisit=float(args.penalty_revisit),
+                        penalty_future=float(args.penalty_future),
+                        penalty_offworkflow=float(args.penalty_offworkflow),
+                        per_step_penalty=float(args.per_step_penalty),
+                    )
+                    # Per-env seed for diversity
+                    try:
+                        env.reset(seed=int(worker_seed_base) + int(rank))
+                    except TypeError:
+                        try:
+                            env.seed(int(worker_seed_base) + int(rank))
+                        except Exception:
+                            pass
+                    try:
+                        env.action_space.seed(int(worker_seed_base) + int(rank))
+                        env.observation_space.seed(int(worker_seed_base) + int(rank))
+                    except Exception:
+                        pass
+                    return env
+                return _init
+            vec_env = DummyVecEnv([make_env_fn(i) for i in range(int(args.num_envs))])
+            # Vec-level monitor: writes one CSV with episode rewards/lengths across envs
+            mon_dir = os.path.join(run_dir, 'monitor')
+            os.makedirs(mon_dir, exist_ok=True)
+            vec_env = VecMonitor(vec_env, filename=os.path.join(mon_dir, 'monitor.csv'))
+            # SB3 policy architecture with LayerNorm-like features extractor
+            class LayerNormMLP(BaseFeaturesExtractor):
+                def __init__(self, observation_space, features_dim=128):
+                    super().__init__(observation_space, features_dim)
+                    n_obs = int(observation_space.shape[0])
+                    self.net = nn.Sequential(
+                        nn.Linear(n_obs, 128),
+                        nn.LayerNorm(128),
+                        nn.ReLU(),
+                        nn.Linear(128, 128),
+                        nn.LayerNorm(128),
+                        nn.ReLU(),
+                    )
+                    for m in self.net:
+                        if isinstance(m, nn.Linear):
+                            nn.init.kaiming_uniform_(m.weight, nonlinearity='relu')
+                            nn.init.zeros_(m.bias)
+                    self._features_dim = 128
+
+                def forward(self, x):
+                    return self.net(x)
+
+            policy_kwargs = dict(
+                features_extractor_class=LayerNormMLP,
+                features_extractor_kwargs=dict(features_dim=128),
+                net_arch=[],          # direct heads on features
+                activation_fn=nn.ReLU,
+                ortho_init=False,
+            )
             # Map our hyperparams
             sb3_model = SB3PPO(
                 "MlpPolicy",
@@ -667,25 +740,86 @@ def main():
                 except Exception:
                     pass
 
+            # Callback to aggregate shaped/canonical/adherence from training rollouts
+            class TrainingMetricsCallback(BaseCallback):
+                def __init__(self, n_envs: int, step_penalty: float, verbose: int = 0):
+                    super().__init__(verbose)
+                    self.n_envs = int(n_envs)
+                    self.step_penalty = float(step_penalty)
+                    self.env_shaped = [0.0 for _ in range(self.n_envs)]
+                    self.env_steps = [0 for _ in range(self.n_envs)]
+                    self.env_vseq = [[] for _ in range(self.n_envs)]
+                    self.ep_shaped = []
+                    self.ep_canonical = []
+                    self.ep_adh = []
+                    self.ep_vseqs = []
+
+                def _on_step(self) -> bool:
+                    rewards = self.locals.get('rewards', None)
+                    infos = self.locals.get('infos', None)
+                    dones = self.locals.get('dones', None)
+                    if rewards is None or infos is None or dones is None:
+                        return True
+                    for i in range(self.training_env.num_envs):
+                        r = float(rewards[i])
+                        self.env_shaped[i] += r
+                        self.env_steps[i] += 1
+                        info = infos[i]
+                        vseq = info.get('visited_sequence', None)
+                        if vseq is not None:
+                            self.env_vseq[i] = list(vseq)
+                        if bool(dones[i]):
+                            ref = [0, 1, 2, 3]
+                            _, weight, _ = positional_match_metrics(self.env_vseq[i], ref)
+                            canonical = float(weight) + float(self.step_penalty) * float(self.env_steps[i])
+                            adh = float(info.get('adherence', 0.0))
+                            self.ep_shaped.append(self.env_shaped[i])
+                            self.ep_canonical.append(canonical)
+                            self.ep_adh.append(adh)
+                            try:
+                                self.ep_vseqs.append(list(self.env_vseq[i]))
+                            except Exception:
+                                pass
+                            self.env_shaped[i] = 0.0
+                            self.env_steps[i] = 0
+                            self.env_vseq[i] = []
+                    return True
+
+                def get_means(self):
+                    if len(self.ep_shaped) == 0:
+                        return 0.0, 0.0, 0.0
+                    import numpy as _np
+                    return (
+                        float(_np.mean(self.ep_shaped)),
+                        float(_np.mean(self.ep_canonical)),
+                        float(_np.mean(self.ep_adh)),
+                    )
+
+                def get_mode_seq(self):
+                    try:
+                        from collections import Counter
+                        if len(self.ep_vseqs) == 0:
+                            return [], 0.0
+                        c = Counter([tuple(s) for s in self.ep_vseqs])
+                        (mode_t, count) = c.most_common(1)[0]
+                        frac = float(count) / float(len(self.ep_vseqs))
+                        return list(mode_t), float(frac)
+                    except Exception:
+                        return [], 0.0
+
             # Train per-update chunks to mirror custom PPO and enable early stopping
             steps_per_update = int(args.num_envs) * int(args.max_steps)
             for update in range(int(args.updates)):
                 global_update_count += 1
                 total_update_idx = int(global_update_count)
-                sb3_model.learn(total_timesteps=steps_per_update, reset_num_timesteps=False, progress_bar=False)
+                cb = TrainingMetricsCallback(n_envs=vec_env.num_envs, step_penalty=float(args.per_step_penalty))
+                sb3_model.learn(total_timesteps=steps_per_update, reset_num_timesteps=False, progress_bar=False, callback=cb)
 
-                # Evaluate canonical env-only, adherence, and shaped reward
-                eval_eps = max(1, int(args.eval_episodes_per_update))
-                eval_env_return, mean_adh = evaluate_model_canonical_sb3(sb3_model, list(wf), eval_eps, int(args.max_steps))
-                shaped_mean = evaluate_model_shaped_sb3(
-                    sb3_model, list(wf), eval_eps, int(args.max_steps),
-                    float(args.gamma), float(args.shaping_coef),
-                    float(args.penalty_revisit), float(args.penalty_future),
-                    float(args.penalty_offworkflow), float(args.per_step_penalty)
-                )
+                shaped_mean, eval_env_return, mean_adh = cb.get_means()
+                mode_seq, mode_frac = cb.get_mode_seq()
                 env_eval_history.append(eval_env_return)
                 last_mean_adherence = float(mean_adh)
-                print(f"  [SB3 Train wf {list(wf)}] Update {update:3d} | Shaped {shaped_mean:7.2f} | Canonical {eval_env_return:7.2f} | Adh {mean_adh:5.1%}", flush=True)
+                print(f"  [SB3 Train wf {list(wf)}] Update {update:3d} | Shaped {shaped_mean:7.2f} | Canonical {eval_env_return:7.2f} | Adh {mean_adh:5.1%} | Visit {mode_seq} ({mode_frac:5.1%})", flush=True)
                 updates_run = update + 1
 
                 # Threshold-triggered early switch score and stability early stop
@@ -729,8 +863,8 @@ def main():
                         'mean_adherence': float(mean_adh),
                         'success_rate': float(0.0),
                         'avg_ep_len': float(0.0),
-                        'mode_seq': '',
-                        'mode_frac': float(0.0),
+                        'mode_seq': ' '.join(map(str, mode_seq)),
+                        'mode_frac': float(mode_frac),
                         'policy_loss': float(0.0),
                         'value_loss': float(0.0),
                         'entropy': float(0.0),
