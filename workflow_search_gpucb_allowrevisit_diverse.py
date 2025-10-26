@@ -248,7 +248,8 @@ class ShapedWorkflowEnv(gym.Wrapper):
                     break
             if next_idx >= len(self.workflow):
                 next_idx = len(self.workflow) - 1
-            cur_target = self.env.target_positions[next_idx]
+            required_target_id = self.workflow[next_idx]
+            cur_target = self.env.target_positions[required_target_id]
             return -float(manhattan(tuple(self.env.agent_pos), tuple(cur_target)))
         except Exception:
             return 0.0
