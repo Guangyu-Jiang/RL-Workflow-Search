@@ -14,7 +14,7 @@ import multiprocessing as mp
 import gym
 import torch.nn as nn
 from stable_baselines3 import PPO as SB3PPO
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from stable_baselines3.common.vec_env import VecMonitor
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
@@ -679,7 +679,10 @@ def main():
                         pass
                     return env
                 return _init
-            vec_env = DummyVecEnv([make_env_fn(i) for i in range(int(args.num_envs))])
+            if int(args.num_envs) > 1:
+                vec_env = SubprocVecEnv([make_env_fn(i) for i in range(int(args.num_envs))], start_method='spawn')
+            else:
+                vec_env = DummyVecEnv([make_env_fn(0)])
             # Vec-level monitor: writes one CSV with episode rewards/lengths across envs
             mon_dir = os.path.join(run_dir, 'monitor')
             os.makedirs(mon_dir, exist_ok=True)
