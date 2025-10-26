@@ -679,10 +679,7 @@ def main():
                         pass
                     return env
                 return _init
-            if int(args.num_envs) > 1:
-                vec_env = SubprocVecEnv([make_env_fn(i) for i in range(int(args.num_envs))], start_method='spawn')
-            else:
-                vec_env = DummyVecEnv([make_env_fn(0)])
+            vec_env = DummyVecEnv([make_env_fn(i) for i in range(int(args.num_envs))])
             # Vec-level monitor: writes one CSV with episode rewards/lengths across envs
             mon_dir = os.path.join(run_dir, 'monitor')
             os.makedirs(mon_dir, exist_ok=True)
