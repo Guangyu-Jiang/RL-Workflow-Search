@@ -142,7 +142,7 @@ class ShapedWorkflowEnv(gym.Wrapper):
         phi_s2 = self._compute_phi()
         shaped = self.shaping_coef * (self.gamma * phi_s2 - phi_s)
 
-        # Additional penalties
+        # Additional penalties and bonuses
         if landed_idx is not None:
             if landed_idx in pre_step_visited:
                 shaped += self.penalty_revisit
@@ -156,11 +156,13 @@ class ShapedWorkflowEnv(gym.Wrapper):
                         break
                 req_idx = min(prefix_ok, len(self.workflow) - 1)
                 required_target = self.workflow[req_idx]
-                if int(landed_idx) != int(required_target):
-                    if landed_idx in self.workflow:
-                        shaped += self.penalty_future
-                    else:
-                        shaped += self.penalty_offworkflow
+                if int(landed_idx) == int(required_target):
+                    # Bonus for correct-order target hit
+                    shaped += 10.0
+                elif landed_idx in self.workflow:
+                    shaped += self.penalty_future
+                else:
+                    shaped += self.penalty_offworkflow
 
         shaped += self.per_step_penalty
 
