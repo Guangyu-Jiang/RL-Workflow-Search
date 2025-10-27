@@ -107,9 +107,9 @@ for idx, (r_min, r_max, c_min, c_max) in enumerate(regions):
     center_r = (r_min + r_max) / 2.0
     center_c = (c_min + c_max) / 2.0
     
-    # Show visit order
-    order_in_workflow = example_workflow.index(idx) + 1
-    ax.text(center_c, center_r, f'R{idx}\n({order_in_workflow})', fontsize=18, fontweight='bold',
+    # Show visit order (0-indexed)
+    order_in_workflow = example_workflow.index(idx)
+    ax.text(center_c, center_r, f'R{idx}\n(visit: {order_in_workflow})', fontsize=18, fontweight='bold',
             ha='center', va='center', color=region_colors[idx])
 
 # Draw arrow path
@@ -135,7 +135,7 @@ ax.text(sc, sr, 'S', fontsize=12, fontweight='bold', ha='center', va='center', z
 
 ax.set_xlabel('Column', fontsize=14, fontweight='bold')
 ax.set_ylabel('Row', fontsize=14, fontweight='bold')
-ax.set_title('Example Workflow: [0, 1, 2, 3]\nVisit Order: R0(1) → R1(2) → R2(3) → R3(4)', 
+ax.set_title('Example Workflow: [0, 1, 2, 3]\nVisit Order: R0(0) → R1(1) → R2(2) → R3(3)', 
              fontsize=16, fontweight='bold', pad=20)
 ax.set_xticks(range(0, grid_size, 2))
 ax.set_yticks(range(0, grid_size, 2))
