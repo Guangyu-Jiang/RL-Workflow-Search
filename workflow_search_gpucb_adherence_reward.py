@@ -537,20 +537,52 @@ def main():
                 except Exception:
                     return [], 0.0
 
-        # Train per-update
+        # Train per-update with timing
+        import time
         steps_per_update = int(args.num_envs) * int(args.max_steps)
+        timing_log = os.path.join(run_dir, 'timing.csv')
         for update in range(int(args.updates)):
             global_update_count += 1
             total_update_idx = int(global_update_count)
             cb = TrainingMetricsCallback(n_envs=vec_env.num_envs, step_penalty=float(args.per_step_penalty))
+            
+            t_start = time.time()
             sb3_model.learn(total_timesteps=steps_per_update, reset_num_timesteps=False, progress_bar=False, callback=cb)
+            t_end = time.time()
+            update_time = t_end - t_start
 
             shaped_mean, eval_env_return, mean_adh, mean_adh_delta = cb.get_means()
             mode_seq, mode_frac = cb.get_mode_seq()
             env_eval_history.append(eval_env_return)
             last_mean_adherence = float(mean_adh)
-            print(f"  [SB3 Adh-Reward wf {list(wf)}] Update {update:3d} | Shaped {shaped_mean:7.2f} | Canonical {eval_env_return:7.2f} | Adh {mean_adh:5.1%} | ΔAdh {mean_adh_delta:+.3f} | Visit {mode_seq} ({mode_frac:5.1%})", flush=True)
+            
+            # Compute speeds
+            steps_collected = steps_per_update
+            sampling_speed = steps_collected / update_time if update_time > 0 else 0.0
+            
+            print(f"  [SB3 Adh-Reward wf {list(wf)}] Update {update:3d} | Shaped {shaped_mean:7.2f} | Canonical {eval_env_return:7.2f} | Adh {mean_adh:5.1%} | ΔAdh {mean_adh_delta:+.3f} | Visit {mode_seq} ({mode_frac:5.1%}) | Time {update_time:.2f}s ({sampling_speed:.0f} steps/s)", flush=True)
             updates_run = update + 1
+            
+            # Log timing
+            try:
+                timing_header = ['workflow', 'visit', 'update', 'total_update', 'update_time_s', 'steps_collected', 'steps_per_sec']
+                timing_row = {
+                    'workflow': '-'.join(map(str, wf)),
+                    'visit': int(vc),
+                    'update': int(update),
+                    'total_update': int(total_update_idx),
+                    'update_time_s': float(update_time),
+                    'steps_collected': int(steps_collected),
+                    'steps_per_sec': float(sampling_speed),
+                }
+                write_timing_header = not os.path.exists(timing_log)
+                with open(timing_log, 'a', newline='') as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames=timing_header)
+                    if write_timing_header:
+                        writer.writeheader()
+                    writer.writerow(timing_row)
+            except Exception:
+                pass
 
             # Threshold-triggered early switch
             if mean_adh >= float(args.adh_eval_threshold):
