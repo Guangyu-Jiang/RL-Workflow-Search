@@ -27,7 +27,8 @@ class AdherenceShapedWorkflowEnv(gym.Wrapper):
     """Gym wrapper with adherence-progress rewards in addition to potential shaping."""
     def __init__(self, env: gym.Env, workflow: List[int], gamma: float, shaping_coef: float,
                  penalty_revisit: float, penalty_future: float, penalty_offworkflow: float,
-                 per_step_penalty: float, adherence_bonus: float = 50.0, adherence_penalty: float = -50.0):
+                 per_step_penalty: float, adherence_bonus: float = 50.0, adherence_penalty: float = -50.0,
+                 env_reward_coef: float = 0.0):
         super().__init__(env)
         self.workflow = list(workflow)
         self.gamma = float(gamma)
@@ -38,6 +39,7 @@ class AdherenceShapedWorkflowEnv(gym.Wrapper):
         self.per_step_penalty = float(per_step_penalty)
         self.adherence_bonus = float(adherence_bonus)
         self.adherence_penalty = float(adherence_penalty)
+        self.env_reward_coef = float(env_reward_coef)
         self.visited_sequence: List[int] = []
         self._phi_s: float = 0.0
         self._prev_adherence: float = 0.0
@@ -118,6 +120,10 @@ class AdherenceShapedWorkflowEnv(gym.Wrapper):
         elif adh_delta < 0:
             shaped += self.adherence_penalty * abs(adh_delta)  # scale by drop
         self._prev_adherence = current_adherence
+
+        # Optionally include original environment reward
+        if self.env_reward_coef != 0.0:
+            shaped += self.env_reward_coef * float(_env_r)
 
         # Update stored potential
         self._phi_s = phi_s2
@@ -227,7 +233,7 @@ def main():
     parser = argparse.ArgumentParser()
     # Base search options
     parser.add_argument('--iterations', type=int, default=0)
-    parser.add_argument('--updates', type=int, default=10000)
+    parser.add_argument('--updates', type=int, default=1000)
     parser.add_argument('--num_envs', type=int, default=25)
     parser.add_argument('--max_steps', type=int, default=500)
     parser.add_argument('--lr', type=float, default=1e-4)
@@ -252,6 +258,7 @@ def main():
     # Adherence-progress rewards
     parser.add_argument('--adherence_bonus', type=float, default=50.0, help='Bonus per unit adherence increase')
     parser.add_argument('--adherence_penalty', type=float, default=-50.0, help='Penalty per unit adherence decrease')
+    parser.add_argument('--env_reward_coef', type=float, default=0.0, help='Coefficient for original environment reward (0=ignore, 1.0=full weight)')
     # GP / kernel
     parser.add_argument('--length_scale', type=float, default=3.0)
     parser.add_argument('--signal_variance', type=float, default=1.0)
@@ -390,6 +397,7 @@ def main():
                     per_step_penalty=float(args.per_step_penalty),
                     adherence_bonus=float(args.adherence_bonus),
                     adherence_penalty=float(args.adherence_penalty),
+                    env_reward_coef=float(args.env_reward_coef),
                 )
                 try:
                     env.reset(seed=int(worker_seed_base) + int(rank))
