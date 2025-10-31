@@ -1,13 +1,11 @@
 """
-Obstacle Maze Environment - 6 checkpoint regions on 30x30 grid with random obstacles.
+Obstacle Maze Environment - 4 checkpoint regions on 30x30 grid with random obstacles.
 
-Checkpoints (each 3×3):
-- CP0: top-left (rows 2-4, cols 2-4)
-- CP1: top-right (rows 2-4, cols 25-27)
-- CP2: bottom-right (rows 25-27, cols 25-27)
-- CP3: bottom-left (rows 25-27, cols 2-4)
-- CP4: middle-left (rows 14-16, cols 7-9)
-- CP5: middle-right (rows 14-16, cols 20-22)
+Checkpoints (each 4×4):
+- CP0: top-left (rows 2-5, cols 2-5)
+- CP1: top-right (rows 2-5, cols 24-27)
+- CP2: bottom-right (rows 24-27, cols 24-27)
+- CP3: bottom-left (rows 24-27, cols 2-5)
 
 Agent starts at center (15, 15). Task: enter checkpoints in specified workflow order.
 Random walls are placed with controllable density; connectivity is verified.
@@ -22,9 +20,9 @@ from collections import deque
 
 class ObstacleMazeEnv(gym.Env):
     """
-    Environment with 6 checkpoint regions and random obstacles.
+    Environment with 4 checkpoint regions and random obstacles.
     Grid: 30×30. Start at center (15,15).
-    Default order: CP0 → CP1 → CP2 → CP3 → CP4 → CP5
+    Default order: CP0 → CP1 → CP2 → CP3
     """
 
     metadata = {"render.modes": ["human"]}
@@ -36,33 +34,29 @@ class ObstacleMazeEnv(gym.Env):
             np.random.seed(seed)
 
         self.grid_size = 30
-        self.num_checkpoints = 6
+        self.num_checkpoints = 4
         self.wall_density = float(wall_density)
 
         # Action and observation spaces
         self.action_space = spaces.Discrete(4)  # 0:up, 1:down, 2:left, 3:right
         self.observation_space = spaces.Box(low=0, high=self.grid_size - 1, shape=(2,), dtype=np.int32)
 
-        # Define 6 checkpoint regions (3×3 each): (r_min, r_max, c_min, c_max)
+        # Define 4 checkpoint regions (4×4 each): (r_min, r_max, c_min, c_max)
         self.checkpoints: List[Tuple[int, int, int, int]] = [
-            (2, 4, 2, 4),       # CP0: top-left
-            (2, 4, 25, 27),     # CP1: top-right
-            (25, 27, 25, 27),   # CP2: bottom-right
-            (25, 27, 2, 4),     # CP3: bottom-left
-            (14, 16, 7, 9),     # CP4: middle-left
-            (14, 16, 20, 22),   # CP5: middle-right
+            (2, 5, 2, 5),       # CP0: top-left
+            (2, 5, 24, 27),     # CP1: top-right
+            (24, 27, 24, 27),   # CP2: bottom-right
+            (24, 27, 2, 5),     # CP3: bottom-left
         ]
         # Checkpoint centers for potential computation
         self.checkpoint_centers: List[Tuple[int, int]] = [
             (3, 3),   # CP0
-            (3, 26),  # CP1
-            (26, 26), # CP2
-            (26, 3),  # CP3
-            (15, 8),  # CP4
-            (15, 21), # CP5
+            (3, 25),  # CP1
+            (25, 25), # CP2
+            (25, 3),  # CP3
         ]
         self.start_pos: Tuple[int, int] = (15, 15)
-        self.correct_order: List[int] = [0, 1, 2, 3, 4, 5]
+        self.correct_order: List[int] = [0, 1, 2, 3]
 
         # Reward config
         self.step_penalty: float = step_penalty
@@ -251,14 +245,14 @@ class ObstacleMazeEnv(gym.Env):
 
     def get_state_for_policy(self) -> np.ndarray:
         """State = [agent_r, agent_c] normalized + checkpoint centers normalized + visited flags."""
-        state = np.zeros(2 + self.num_checkpoints * 2 + self.num_checkpoints, dtype=np.float32)
+        state = np.zeros(2 + 4 * 2 + 4, dtype=np.float32)
         norm = float(self.grid_size - 1)
         state[0] = self.agent_pos[0] / norm
         state[1] = self.agent_pos[1] / norm
         for i, (r, c) in enumerate(self.checkpoint_centers):
             state[2 + i * 2] = r / norm
             state[2 + i * 2 + 1] = c / norm
-        for i in range(self.num_checkpoints):
-            state[2 + self.num_checkpoints * 2 + i] = 1.0 if i in self.visited_checkpoints else 0.0
+        for i in range(4):
+            state[2 + 8 + i] = 1.0 if i in self.visited_checkpoints else 0.0
         return state
 

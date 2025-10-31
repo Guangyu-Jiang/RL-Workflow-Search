@@ -1,6 +1,6 @@
 """
 Multiprocessing PPO baseline on ObstacleMazeEnv using env-only rewards.
-Trains to visit 6 checkpoints in canonical order [0,1,2,3,4,5].
+Trains to visit 4 checkpoints in canonical order [0,1,2,3].
 """
 
 import argparse
@@ -66,7 +66,7 @@ def worker_episode(worker_id: int, policy_state_dict, max_steps: int, wall_densi
     """Run one episode in a separate process."""
     try:
         torch.set_num_threads(1)
-        state_dim = 2 + 6 * 2 + 6  # agent(2) + checkpoint_centers(12) + visited_flags(6)
+        state_dim = 2 + 4 * 2 + 4  # agent(2) + checkpoint_centers(8) + visited_flags(4)
         policy = Policy(state_dim)
         policy.load_state_dict(policy_state_dict)
         policy.eval()
@@ -108,8 +108,8 @@ def worker_episode(worker_id: int, policy_state_dict, max_steps: int, wall_densi
                 break
 
         first_visits = calculate_first_visits(visited_sequence)
-        adherence = adherence_rate(first_visits, [0, 1, 2, 3, 4, 5])
-        success = (first_visits == [0, 1, 2, 3, 4, 5])
+        adherence = adherence_rate(first_visits, [0, 1, 2, 3])
+        success = (first_visits == [0, 1, 2, 3])
         traj["ep_return"] = float(ep_return)
         traj["visited_sequence"] = first_visits
         traj["adherence"] = float(adherence)
@@ -215,7 +215,7 @@ def main():
     with open(updates_csv, 'w') as f:
         f.write('update,mean_return,mean_adherence,success_rate,policy_loss,value_loss,entropy\n')
 
-    state_dim = 2 + 6 * 2 + 6
+    state_dim = 2 + 4 * 2 + 4
     policy = Policy(state_dim).to(device)
     optimizer = optim.Adam(policy.parameters(), lr=args.lr)
 

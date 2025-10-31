@@ -1,7 +1,7 @@
 """
-Workflow Search with GP-UCB on ObstacleMazeEnv (6 checkpoints with obstacles).
+Workflow Search with GP-UCB on ObstacleMazeEnv (4 checkpoints with obstacles).
 
-Extension to obstacle maze with 6 checkpoints (720 possible orderings):
+Extension to obstacle maze with 4 checkpoints (24 possible orderings):
 - Agent must navigate around walls to enter checkpoints in specified order
 - Uses adherence-progress rewards + potential shaping
 - All GP-UCB, continuation, and early-stop features
@@ -47,11 +47,11 @@ class AdherenceShapedMazeEnv(gym.Wrapper):
         self.visited_sequence: List[int] = []
         self._phi_s: float = 0.0
         self._prev_adherence: float = 0.0
-        # Observation: agent(2) + checkpoint_centers(12) + visited(6) + next_cp_onehot(6) + workflow_vec(6) = 32
+        # Observation: agent(2) + checkpoint_centers(8) + visited(4) + next_cp_onehot(4) + workflow_vec(4) = 22
         import numpy as _np
         self.observation_space = gym.spaces.Box(
-            low=_np.zeros(32, dtype=_np.float32),
-            high=_np.ones(32, dtype=_np.float32),
+            low=_np.zeros(22, dtype=_np.float32),
+            high=_np.ones(22, dtype=_np.float32),
             dtype=_np.float32,
         )
 
@@ -174,13 +174,13 @@ class AdherenceShapedMazeEnv(gym.Wrapper):
         centers_norm = _np.asarray(centers, dtype=_np.float32)
 
         # Visited flags
-        visited_flags = _np.zeros(6, dtype=_np.float32)
+        visited_flags = _np.zeros(4, dtype=_np.float32)
         for t in self.visited_sequence:
-            if 0 <= int(t) < 6:
+            if 0 <= int(t) < 4:
                 visited_flags[int(t)] = 1.0
 
         # Next-checkpoint one-hot
-        one_hot = _np.zeros(6, dtype=_np.float32)
+        one_hot = _np.zeros(4, dtype=_np.float32)
         next_idx = 0
         for i, t in enumerate(self.workflow):
             if t in self.visited_sequence:
@@ -191,13 +191,13 @@ class AdherenceShapedMazeEnv(gym.Wrapper):
             next_cp = self.workflow[-1]
         else:
             next_cp = self.workflow[next_idx]
-        if 0 <= int(next_cp) < 6:
+        if 0 <= int(next_cp) < 4:
             one_hot[int(next_cp)] = 1.0
 
         # Workflow encoding
-        wf_vec = _np.zeros(6, dtype=_np.float32)
+        wf_vec = _np.zeros(4, dtype=_np.float32)
         for i, t in enumerate(self.workflow):
-            wf_vec[t] = (i + 1) / 6.0
+            wf_vec[t] = (i + 1) / 4.0
 
         return _np.concatenate([agent_norm, centers_norm, visited_flags, one_hot, wf_vec], axis=0)
 
@@ -285,7 +285,7 @@ def main():
             'pid': int(pid),
             'run_dir': run_dir,
             'MAX_TOTAL_UPDATES': int(MAX_TOTAL_UPDATES),
-            'num_candidates': 720,
+            'num_candidates': 24,
         }, f, indent=2)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -307,7 +307,7 @@ def main():
             rect = mpatches.Rectangle((c - 0.5, r - 0.5), 1, 1, linewidth=0, facecolor='gray', alpha=0.6)
             ax.add_patch(rect)
         # Draw checkpoints
-        cp_colors = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+        cp_colors = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
         for idx, (r_min, r_max, c_min, c_max) in enumerate(ref_env.checkpoints):
             width = c_max - c_min + 1
             height = r_max - r_min + 1
@@ -334,13 +334,13 @@ def main():
     except Exception as e:
         print(f"Could not save maze visualization: {e}")
 
-    # Candidate workflows (6! = 720)
-    candidates: List[List[int]] = [list(p) for p in itertools.permutations([0, 1, 2, 3, 4, 5])]
+    # Candidate workflows (4! = 24)
+    candidates: List[List[int]] = [list(p) for p in itertools.permutations([0, 1, 2, 3])]
     candidate_embeddings = [
         build_workflow_embedding(
             w,
             kernel_type=args.kernel_type,
-            num_targets=6,
+            num_targets=4,
             rank_scale=args.rank_scale,
             pairwise_scale=args.pairwise_scale,
         ) for w in candidates
@@ -524,8 +524,8 @@ def main():
                     if vseq is not None:
                         self.env_vseq[i] = list(vseq)
                     if bool(dones[i]):
-                        # Canonical: positional match vs [0,1,2,3,4,5]
-                        ref = [0, 1, 2, 3, 4, 5]
+                        # Canonical: positional match vs [0,1,2,3]
+                        ref = [0, 1, 2, 3]
                         _, weight, _ = positional_match_metrics(self.env_vseq[i], ref)
                         canonical = float(weight) + float(self.step_penalty) * float(self.env_steps[i])
                         adh = float(info.get('adherence', 0.0))
@@ -675,12 +675,12 @@ def main():
     if len(observed_scores) > 0:
         best_idx = int(np.argmax(observed_scores))
         print("\n=== Obstacle Maze Workflow Search Completed ===")
-        print(f"Observed {len(observed_indices)} unique workflows (out of 720 total)")
+        print(f"Observed {len(observed_indices)} unique workflows (out of 24 total)")
         print(f"Best workflow: {candidates[observed_indices[best_idx]]} with score {observed_scores[best_idx]:.2f}")
         with open(os.path.join(run_dir, 'summary.json'), 'w') as f:
             json.dump({
                 'observed_count': int(len(observed_indices)),
-                'total_candidates': 720,
+                'total_candidates': 24,
                 'best_workflow': candidates[observed_indices[best_idx]],
                 'best_score': float(observed_scores[best_idx])
             }, f, indent=2)

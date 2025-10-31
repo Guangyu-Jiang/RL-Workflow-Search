@@ -15,8 +15,8 @@ checkpoints = env.checkpoints
 checkpoint_centers = env.checkpoint_centers
 walls = env.walls
 
-checkpoint_names = [f'CP{i}' for i in range(6)]
-checkpoint_colors = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+checkpoint_names = [f'CP{i}' for i in range(4)]
+checkpoint_colors = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
 
 # Create map figure
 fig, ax = plt.subplots(1, 1, figsize=(12, 12), dpi=120)
@@ -64,7 +64,7 @@ ax.text(sc, sr, 'S', fontsize=10, fontweight='bold', ha='center', va='center', z
 
 ax.set_xlabel('Column', fontsize=14, fontweight='bold')
 ax.set_ylabel('Row', fontsize=14, fontweight='bold')
-ax.set_title(f'Obstacle Maze Environment ({grid_size}×{grid_size})\n6 Checkpoints with {int(walls.sum())} Walls (density={env.wall_density:.2f})', 
+ax.set_title(f'Obstacle Maze Environment ({grid_size}×{grid_size})\n4 Checkpoints with {int(walls.sum())} Walls (density={env.wall_density:.2f})', 
              fontsize=16, fontweight='bold', pad=20)
 ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), fontsize=10, frameon=True)
 ax.set_xticks(range(0, grid_size, 5))
@@ -79,7 +79,7 @@ plt.close()
 # Create workflow example figure
 np.random.seed(42)
 env = ObstacleMazeEnv(wall_density=0.15)
-example_workflow = [0, 1, 2, 3, 4, 5]
+example_workflow = [0, 1, 2, 3]
 
 fig, ax = plt.subplots(1, 1, figsize=(12, 12), dpi=120)
 ax.set_xlim(-0.5, grid_size - 0.5)
@@ -140,7 +140,7 @@ ax.text(sc, sr, 'S', fontsize=10, fontweight='bold', ha='center', va='center', z
 
 ax.set_xlabel('Column', fontsize=14, fontweight='bold')
 ax.set_ylabel('Row', fontsize=14, fontweight='bold')
-ax.set_title('Example Workflow: [0, 1, 2, 3, 4, 5]\nMust navigate around walls to visit checkpoints in order', 
+ax.set_title('Example Workflow: [0, 1, 2, 3]\nMust navigate around walls to visit checkpoints in order', 
              fontsize=16, fontweight='bold', pad=20)
 ax.set_xticks(range(0, grid_size, 5))
 ax.set_yticks(range(0, grid_size, 5))
