@@ -290,6 +290,50 @@ def main():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    # Create a reference maze instance to save layout visualization
+    ref_env = ObstacleMazeEnv(max_steps=int(args.max_steps), wall_density=float(args.wall_density), seed=int(args.seed))
+    ref_env.reset()
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10), dpi=100)
+        ax.set_xlim(-0.5, ref_env.grid_size - 0.5)
+        ax.set_ylim(-0.5, ref_env.grid_size - 0.5)
+        ax.set_aspect('equal')
+        ax.invert_yaxis()
+        # Draw walls
+        wall_positions = np.argwhere(ref_env.walls == 1)
+        for (r, c) in wall_positions:
+            rect = mpatches.Rectangle((c - 0.5, r - 0.5), 1, 1, linewidth=0, facecolor='gray', alpha=0.6)
+            ax.add_patch(rect)
+        # Draw checkpoints
+        cp_colors = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+        for idx, (r_min, r_max, c_min, c_max) in enumerate(ref_env.checkpoints):
+            width = c_max - c_min + 1
+            height = r_max - r_min + 1
+            rect = mpatches.Rectangle((c_min - 0.5, r_min - 0.5), width, height, linewidth=2,
+                                     edgecolor=cp_colors[idx], facecolor=cp_colors[idx], alpha=0.4)
+            ax.add_patch(rect)
+            center_r = (r_min + r_max) / 2.0
+            center_c = (c_min + c_max) / 2.0
+            ax.text(center_c, center_r, f'CP{idx}', fontsize=12, fontweight='bold', ha='center', va='center', color=cp_colors[idx])
+        # Mark start
+        sr, sc = ref_env.start_pos
+        ax.plot(sc, sr, marker='o', markersize=10, color='black', markeredgewidth=2, markerfacecolor='white', zorder=10)
+        ax.text(sc, sr, 'S', fontsize=8, fontweight='bold', ha='center', va='center', zorder=11)
+        ax.set_xlabel('Column', fontsize=12)
+        ax.set_ylabel('Row', fontsize=12)
+        ax.set_title(f'Maze Layout (seed={args.seed}, walls={ref_env.walls.sum()}, density={args.wall_density:.2f})', fontsize=14, fontweight='bold')
+        ax.set_xticks(range(0, ref_env.grid_size, 5))
+        ax.set_yticks(range(0, ref_env.grid_size, 5))
+        ax.grid(True, alpha=0.2, linewidth=0.5)
+        plt.tight_layout()
+        plt.savefig(os.path.join(run_dir, 'maze_layout.png'), dpi=100, bbox_inches='tight')
+        plt.close()
+        print(f"Saved maze layout to {run_dir}/maze_layout.png")
+    except Exception as e:
+        print(f"Could not save maze visualization: {e}")
+
     # Candidate workflows (6! = 720)
     candidates: List[List[int]] = [list(p) for p in itertools.permutations([0, 1, 2, 3, 4, 5])]
     candidate_embeddings = [
