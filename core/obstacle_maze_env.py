@@ -1,13 +1,14 @@
 """
 Obstacle Maze Environment - 4 checkpoint regions on 30x30 grid with random obstacles.
 
-Checkpoints (each 4×4):
+Checkpoints (each 4×4) - positioned for diagonal crisscross traversal:
 - CP0: top-left (rows 2-5, cols 2-5)
-- CP1: top-right (rows 2-5, cols 24-27)
-- CP2: bottom-right (rows 24-27, cols 24-27)
+- CP1: bottom-right (rows 24-27, cols 24-27)
+- CP2: top-right (rows 2-5, cols 24-27)
 - CP3: bottom-left (rows 24-27, cols 2-5)
 
-Agent starts at center (15, 15). Task: enter checkpoints in specified workflow order.
+Canonical order [0,1,2,3] creates full-map diagonal traversal pattern.
+Agent starts at center (15, 15).
 Random walls are placed with controllable density; connectivity is verified.
 """
 
@@ -42,18 +43,19 @@ class ObstacleMazeEnv(gym.Env):
         self.observation_space = spaces.Box(low=0, high=self.grid_size - 1, shape=(2,), dtype=np.int32)
 
         # Define 4 checkpoint regions (4×4 each): (r_min, r_max, c_min, c_max)
+        # Positioned for diagonal crisscross: 0(TL) → 1(BR) → 2(TR) → 3(BL)
         self.checkpoints: List[Tuple[int, int, int, int]] = [
             (2, 5, 2, 5),       # CP0: top-left
-            (2, 5, 24, 27),     # CP1: top-right
-            (24, 27, 24, 27),   # CP2: bottom-right
-            (24, 27, 2, 5),     # CP3: bottom-left
+            (24, 27, 24, 27),   # CP1: bottom-right (diagonal from CP0)
+            (2, 5, 24, 27),     # CP2: top-right
+            (24, 27, 2, 5),     # CP3: bottom-left (diagonal from CP2)
         ]
         # Checkpoint centers for potential computation
         self.checkpoint_centers: List[Tuple[int, int]] = [
-            (3, 3),   # CP0
-            (3, 25),  # CP1
-            (25, 25), # CP2
-            (25, 3),  # CP3
+            (3, 3),   # CP0: top-left
+            (25, 25), # CP1: bottom-right
+            (3, 25),  # CP2: top-right
+            (25, 3),  # CP3: bottom-left
         ]
         self.start_pos: Tuple[int, int] = (15, 15)
         self.correct_order: List[int] = [0, 1, 2, 3]
