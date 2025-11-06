@@ -252,34 +252,41 @@ def collect_hrl_rollouts(policy: HierarchicalPolicy, envs: List[AdherenceShapedM
 
     step_count = 0
     while step_count < max_steps:
-        for i in range(num_envs):
-            if option_steps[i] >= option_duration:
-                s_tensor = torch.tensor(states[i], dtype=torch.float32).unsqueeze(0).to(device)
-                o_tensor = torch.tensor([options[i]], dtype=torch.long).to(device)
-                _, value_opt = policy.low_level.forward(s_tensor, o_tensor)
-
+        # Handle option terminations (batched)
+        need_new_option = [i for i in range(num_envs) if option_steps[i] >= option_duration]
+        if need_new_option:
+            with torch.no_grad():
+                term_states = torch.tensor([states[i] for i in need_new_option], dtype=torch.float32).to(device)
+                term_options = torch.tensor([options[i] for i in need_new_option], dtype=torch.long).to(device)
+                _, term_values = policy.low_level.forward(term_states, term_options)
+                new_options, new_logps = policy.select_option(term_states, deterministic=False)
+            
+            for idx, i in enumerate(need_new_option):
                 traj_high["states"].append(states[i])
                 traj_high["options"].append(options[i])
                 traj_high["logps"].append(option_logps[i])
                 traj_high["rewards"].append(0.0)
-                traj_high["values"].append(float(value_opt.item()))
+                traj_high["values"].append(float(term_values[idx].item()))
                 traj_high["dones"].append(False)
-
-                opt, logp_opt = policy.select_option(s_tensor, deterministic=False)
-                options[i] = int(opt.item())
-                option_logps[i] = float(logp_opt.item())
+                
+                options[i] = int(new_options[idx].item())
+                option_logps[i] = float(new_logps[idx].item())
                 option_steps[i] = 0
 
-        actions, logps_low, values_low = [], [], []
-        for i in range(num_envs):
-            with torch.no_grad():
-                s_tensor = torch.tensor(states[i], dtype=torch.float32).unsqueeze(0).to(device)
-                o_tensor = torch.tensor([options[i]], dtype=torch.long).to(device)
-                a, logp, v = policy.select_action(s_tensor, o_tensor, deterministic=False)
-                actions.append(int(a.item()))
-                logps_low.append(float(logp.item()))
-                values_low.append(float(v.item()))
+        # Batch action selection for all environments
+        with torch.no_grad():
+            all_states = torch.tensor(states, dtype=torch.float32).to(device)
+            all_options = torch.tensor(options, dtype=torch.long).to(device)
+            actions_tensor, logps_tensor, values_tensor = policy.select_action(
+                all_states, all_options, deterministic=False
+            )
+            actions = [int(a.item()) for a in actions_tensor]
+            logps_low = [float(lp.item()) for lp in logps_tensor]
+            values_low = [float(v.item()) for v in values_tensor]
 
+        # Step all environments
+        terminals = []
+        terminal_infos = []
         for i in range(num_envs):
             obs, reward, done, info = envs[i].step(actions[i])
             terminal = bool(done)
@@ -300,36 +307,48 @@ def collect_hrl_rollouts(policy: HierarchicalPolicy, envs: List[AdherenceShapedM
             option_steps[i] += 1
 
             if terminal:
-                s_tensor = torch.tensor(states[i], dtype=torch.float32).unsqueeze(0).to(device)
-                o_tensor = torch.tensor([options[i]], dtype=torch.long).to(device)
-                _, value_opt = policy.low_level.forward(s_tensor, o_tensor)
+                terminals.append(i)
+                terminal_infos.append(info)
+            else:
+                states[i] = state_for_policy
 
+        # Batch process terminal episodes
+        if terminals:
+            with torch.no_grad():
+                term_states = torch.tensor([states[i] for i in terminals], dtype=torch.float32).to(device)
+                term_options = torch.tensor([options[i] for i in terminals], dtype=torch.long).to(device)
+                _, term_values = policy.low_level.forward(term_states, term_options)
+            
+            for idx, i in enumerate(terminals):
                 traj_high["states"].append(states[i])
                 traj_high["options"].append(options[i])
                 traj_high["logps"].append(option_logps[i])
                 traj_high["rewards"].append(ep_returns[i])
-                traj_high["values"].append(float(value_opt.item()))
+                traj_high["values"].append(float(term_values[idx].item()))
                 traj_high["dones"].append(True)
 
                 episode_stats.append({
                     "return": float(ep_returns[i]),
                     "visited_sequence": list(ep_visited_seqs[i]),
-                    "adherence": float(info.get("adherence", 0.0)),
-                    "success": bool(info.get("success", False)),
+                    "adherence": float(terminal_infos[idx].get("adherence", 0.0)),
+                    "success": bool(terminal_infos[idx].get("success", False)),
                 })
 
-                obs = envs[i].reset()
+                # Reset environment
+                envs[i].reset()
                 states[i] = envs[i].get_state_for_policy()
                 ep_returns[i] = 0.0
                 ep_visited_seqs[i] = []
                 option_steps[i] = 0
-                with torch.no_grad():
-                    s_tensor = torch.tensor(states[i], dtype=torch.float32).unsqueeze(0).to(device)
-                    opt, logp_opt = policy.select_option(s_tensor, deterministic=False)
-                    options[i] = int(opt.item())
-                    option_logps[i] = float(logp_opt.item())
-            else:
-                states[i] = state_for_policy
+
+            # Batch select new options for reset environments
+            with torch.no_grad():
+                reset_states = torch.tensor([states[i] for i in terminals], dtype=torch.float32).to(device)
+                reset_options, reset_logps = policy.select_option(reset_states, deterministic=False)
+            
+            for idx, i in enumerate(terminals):
+                options[i] = int(reset_options[idx].item())
+                option_logps[i] = float(reset_logps[idx].item())
 
         step_count += 1
 
