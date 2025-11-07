@@ -62,17 +62,28 @@ class Policy(nn.Module):
         return a, logp, v
 
 
-def worker_episode(worker_id: int, policy_state_dict, max_steps: int, wall_density: float, return_queue: mp.Queue):
+def worker_episode(worker_id: int, policy_state_dict, max_steps: int, wall_density: float, seed_base: int, return_queue: mp.Queue):
     """Run one episode in a separate process."""
     try:
         torch.set_num_threads(1)
+        worker_seed = int(seed_base) + int(worker_id)
+        np.random.seed(worker_seed)
+        torch.manual_seed(worker_seed)
         state_dim = 2 + 4 * 2 + 4  # agent(2) + checkpoint_centers(8) + visited_flags(4)
         policy = Policy(state_dim)
         policy.load_state_dict(policy_state_dict)
         policy.eval()
 
         env = ObstacleMazeEnv(max_steps=max_steps, wall_density=wall_density)
-        env.reset()
+        try:
+            env.reset(seed=worker_seed)
+        except TypeError:
+            env.reset()
+        try:
+            env.action_space.seed(worker_seed)
+            env.observation_space.seed(worker_seed)
+        except Exception:
+            pass
         state = env.get_state_for_policy()
 
         traj = {k: [] for k in ["states", "actions", "logps", "rewards", "values", "dones"]}
@@ -184,17 +195,20 @@ def ppo_update(policy: Policy, optimizer, batch, clip=0.2, value_coef=0.5, entro
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--updates', type=int, default=100)
+    parser.add_argument('--updates', type=int, default=2000)
     parser.add_argument('--num_envs', type=int, default=25)
-    parser.add_argument('--max_steps', type=int, default=800)
+    parser.add_argument('--max_steps', type=int, default=500)
     parser.add_argument('--wall_density', type=float, default=0.15)
     parser.add_argument('--lr', type=float, default=3e-4)
     parser.add_argument('--ppo_epochs', type=int, default=4)
     parser.add_argument('--minibatch_size', type=int, default=128)
     parser.add_argument('--exp_name', type=str, default='ppo_baseline_maze_mp')
+    parser.add_argument('--seed', type=int, default=0)
     args = parser.parse_args()
 
     torch.set_num_threads(1)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     os.makedirs('logs', exist_ok=True)
@@ -209,7 +223,8 @@ def main():
             'lr': args.lr,
             'ppo_epochs': args.ppo_epochs,
             'minibatch_size': args.minibatch_size,
-            'exp_name': args.exp_name
+            'exp_name': args.exp_name,
+            'seed': args.seed
         }, f, indent=2)
     updates_csv = os.path.join(run_dir, 'updates.csv')
     with open(updates_csv, 'w') as f:
@@ -227,7 +242,10 @@ def main():
         return_queue: mp.Queue = mp.Queue()
         workers: List[mp.Process] = []
         for wid in range(args.num_envs):
-            p = mp.Process(target=worker_episode, args=(wid, policy_state_dict, args.max_steps, args.wall_density, return_queue))
+            p = mp.Process(
+                target=worker_episode,
+                args=(wid, policy_state_dict, args.max_steps, args.wall_density, args.seed, return_queue)
+            )
             p.daemon = True
             p.start()
             workers.append(p)
@@ -278,4 +296,3 @@ def main():
 if __name__ == '__main__':
     mp.set_start_method('fork', force=True)
     main()
-

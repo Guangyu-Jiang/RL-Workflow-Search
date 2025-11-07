@@ -238,8 +238,8 @@ def compute_gae(rewards, values, dones, gamma=0.99, lam=0.95):
     return np.array(adv, dtype=np.float32), np.array(ret, dtype=np.float32)
 
 
-def ppo_update_hrl(high_policy: HierarchicalPolicy.high_level.__class__,
-                   low_policy: HierarchicalPolicy.low_level.__class__,
+def ppo_update_hrl(high_policy,
+                   low_policy,
                    optimizer_high, optimizer_low,
                    batch_high, batch_low,
                    clip=0.2, value_coef=0.5, entropy_coef=0.01, epochs=4, bs=128, device=None):
@@ -911,4 +911,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
